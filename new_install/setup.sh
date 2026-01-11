@@ -87,16 +87,17 @@ fi
 # List entries in the distro directory in lexical order.
 mapfile -t entries < <(ls -1 "$target_dir" 2>/dev/null | sort)
 
-# Build a list of scripts to run in the intended order so we can report
-# outcomes even if we stop early.
-scripts_to_run=()
+# Build a list of entry scripts so we can report grouped outcomes.
+entry_names=()
+entry_count=0
 
 for entry in "${entries[@]}"; do
   entry_path="${target_dir}/${entry}"
+  scripts=()
 
   # Execute top-level shell scripts directly.
   if [[ -f "$entry_path" && "$entry" == *.sh ]]; then
-    scripts_to_run+=("$entry_path")
+    scripts=("$entry_path")
   elif [[ -d "$entry_path" ]]; then
     # Execute all *.sh scripts within a directory, in lexical order.
     shopt -s nullglob
@@ -105,44 +106,107 @@ for entry in "${entries[@]}"; do
 
     if [[ "${#nested_scripts[@]}" -gt 0 ]]; then
       mapfile -t nested_sorted < <(printf '%s\n' "${nested_scripts[@]}" | sort)
-    else
-      nested_sorted=()
+      scripts=("${nested_sorted[@]}")
     fi
-
-    for script in "${nested_sorted[@]}"; do
-      scripts_to_run+=("$script")
-    done
   fi
+
+  if [[ "${#scripts[@]}" -eq 0 ]]; then
+    continue
+  fi
+
+  entry_names+=("$entry")
+  eval "entry_script_paths_${entry_count}=(\"\${scripts[@]}\")"
+  entry_count=$((entry_count + 1))
 done
 
-# Track per-script results for a final report.
-statuses=()
+# Track per-entry and per-script results for a final report.
+entry_statuses=()
 failed_count=0
+skip_remaining=false
 
-for script in "${scripts_to_run[@]}"; do
-  echo "Running ${script}"
-  if bash "$script"; then
-    statuses+=("ok")
-  else
-    statuses+=("failed")
-    failed_count=$((failed_count + 1))
-    if [[ "$continue_on_failure" == "false" ]]; then
+for entry_index in "${!entry_names[@]}"; do
+  eval "scripts=(\"\${entry_script_paths_${entry_index}[@]}\")"
+
+  if [[ "$skip_remaining" == "true" ]]; then
+    entry_statuses+=("skipped")
+    eval "entry_script_statuses_${entry_index}=()"
+    for _ in "${scripts[@]}"; do
+      eval "entry_script_statuses_${entry_index}+=(\"skipped\")"
+    done
+    continue
+  fi
+
+  entry_failed=false
+  eval "entry_script_statuses_${entry_index}=()"
+
+  for script in "${scripts[@]}"; do
+    if [[ "$skip_remaining" == "true" ]]; then
+      eval "entry_script_statuses_${entry_index}+=(\"skipped\")"
+      continue
+    fi
+
+    echo "Running ${script}"
+    if bash "$script"; then
+      eval "entry_script_statuses_${entry_index}+=(\"ok\")"
+    else
+      eval "entry_script_statuses_${entry_index}+=(\"failed\")"
+      failed_count=$((failed_count + 1))
+      entry_failed=true
+      if [[ "$continue_on_failure" == "false" ]]; then
+        skip_remaining=true
+      fi
+    fi
+  done
+
+  if [[ "$entry_failed" == "true" ]]; then
+    entry_statuses+=("failed")
+    continue
+  fi
+
+  eval "script_statuses=(\"\${entry_script_statuses_${entry_index}[@]}\")"
+  all_skipped=true
+  for status in "${script_statuses[@]}"; do
+    if [[ "$status" != "skipped" ]]; then
+      all_skipped=false
       break
     fi
+  done
+
+  if [[ "$all_skipped" == "true" ]]; then
+    entry_statuses+=("skipped")
+  else
+    entry_statuses+=("ok")
   fi
 done
 
-if [[ "${#statuses[@]}" -lt "${#scripts_to_run[@]}" ]]; then
-  remaining=$(( ${#scripts_to_run[@]} - ${#statuses[@]} ))
-  for ((i = 0; i < remaining; i++)); do
-    statuses+=("skipped")
-  done
-fi
+status_emoji() {
+  case "$1" in
+    ok) echo "✅" ;;
+    failed) echo "❌" ;;
+    skipped) echo "🟡" ;;
+  esac
+}
+
+status_label() {
+  case "$1" in
+    ok) echo "SUCCESS" ;;
+    failed) echo "FAILED" ;;
+    skipped) echo "SKIPPED" ;;
+  esac
+}
 
 # Print a clear report for every script, whether it ran or was skipped.
 echo "Run report:"
-for i in "${!scripts_to_run[@]}"; do
-  printf '  %s: %s\n' "${scripts_to_run[$i]}" "${statuses[$i]}"
+for entry_index in "${!entry_names[@]}"; do
+  entry_status="${entry_statuses[$entry_index]}"
+  printf '%s %s: %s\n' "$(status_emoji "$entry_status")" "${entry_names[$entry_index]}" "$(status_label "$entry_status")"
+  eval "script_statuses=(\"\${entry_script_statuses_${entry_index}[@]}\")"
+  eval "script_paths=(\"\${entry_script_paths_${entry_index}[@]}\")"
+  for script_index in "${!script_paths[@]}"; do
+    script_name="$(basename "${script_paths[$script_index]}")"
+    script_status="${script_statuses[$script_index]}"
+    printf '  %s %s: %s\n' "$(status_emoji "$script_status")" "$script_name" "$(status_label "$script_status")"
+  done
 done
 
 if [[ "$failed_count" -gt 0 ]]; then
