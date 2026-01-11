@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-sudo dnf install -y starship
+curl -sS https://starship.rs/install.sh | sh -s -- -y
