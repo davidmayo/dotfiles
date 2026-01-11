@@ -1,0 +1,13 @@
+{
+    "editor.minimap.enabled": false,
+    "explorer.compactFolders": false,
+    "files.exclude": {
+        "**/__pycache__/": true,
+        "**/.git": false
+    },
+    "workbench.list.openMode": "doubleClick",
+    "workbench.tree.expandMode": "doubleClick",
+    "workbench.startupEditor": "none",
+    "window.commandCenter": false,
+    "explorer.autoReveal": "focusNoScroll"
+}
